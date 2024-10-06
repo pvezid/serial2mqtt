@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const maxConn = 10
@@ -89,6 +90,7 @@ func (s *server) acceptConnections() {
 }
 
 func (s *server) addConnection(conn net.Conn) error {
+	time.Sleep(500 * time.Millisecond)
 	s.muConn.Lock()
 	defer s.muConn.Unlock()
 
@@ -103,7 +105,7 @@ func (s *server) addConnection(conn net.Conn) error {
 func (s *server) handleRequests(ich <-chan string) {
 	slog.Info("TCPOutput init")
 	for m := range ich {
-		buff := fmt.Sprintln(m)
+		buff := fmt.Sprintf("%s\r\n", m)
 		s.broadcast(buff)
 	}
 	slog.Info("TCPOutput done")

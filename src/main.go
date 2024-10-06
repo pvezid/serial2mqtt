@@ -67,15 +67,17 @@ func main() {
 
 	handlers.SerialPortList()
 
-	ch_S2N := make(chan string, 3)
+	ch_S2N := make(chan string, 10)
 	ch_N2S := make(chan string, 3)
 
 	// SerialHandler tourne en boucle en permanence
 	if logFile == "" {
-		go handlers.SerialHandler(serialdev, serialbaud, ch_N2S, ch_S2N)
+		go handlers.SerialHandler("/dev/ttyGPS", 4800, nil, ch_S2N, "$GP")
+		go handlers.SerialHandler("/dev/ttyGX2200E", 38400, nil, ch_S2N, "!AI")
 	} else {
-		ch_log := make(chan string, 3)
-		go handlers.SerialHandler(serialdev, serialbaud, ch_N2S, ch_log)
+		ch_log := make(chan string, 10)
+		go handlers.SerialHandler("/dev/ttyGPS", 4800, nil, ch_log, "$GP")
+		go handlers.SerialHandler("/dev/ttyGX2200E", 38400, nil, ch_log, "!AI")
 		twg.Add(1)
 		go func() {
 			defer twg.Done()
@@ -87,7 +89,17 @@ func main() {
 	if brokerURL != "" {
 		handlers.MQTTHandler(brokerURL, subtopic, pubtopic, ch_S2N, ch_N2S)
 	} else if udpbroadcast != "" {
-		handlers.UDPHandler(udpbroadcast, ch_S2N)
+		ch_o1 := make(chan string, 3)
+		ch_o2 := make(chan string, 3)
+		go func() {
+			for msg := range ch_S2N {
+				slog.Debug("Dispatch writing", "payload", msg)
+				ch_o1 <- msg
+				ch_o2 <- msg
+			}
+		}()
+		go handlers.UDPHandler(udpbroadcast, ch_o1)
+		handlers.TCPHandler(tcpserver, ch_o2)
 	} else {
 		handlers.TCPHandler(tcpserver, ch_S2N)
 	}

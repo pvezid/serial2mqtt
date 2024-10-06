@@ -45,7 +45,7 @@ func UDPHandler(connstr string, ich <-chan string) {
 
 	slog.Info("UDPOutput init")
 	for m := range ich {
-		buff := fmt.Sprintln(m)
+		buff := fmt.Sprintf("%s\n", m)
 		_, err := conn.Write([]byte(buff))
 		if err != nil {
 			slog.Error("UDPOutput write", "error", err)

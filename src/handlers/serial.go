@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"go.bug.st/serial"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -39,7 +40,7 @@ func SerialPortList() {
 	}
 }
 
-func SerialHandler(dev string, baud int, ich <-chan string, och chan<- string) {
+func SerialHandler(dev string, baud int, ich <-chan string, och chan<- string, filter string) {
 	mode := &serial.Mode{
 		BaudRate: baud,
 	}
@@ -57,18 +58,20 @@ func SerialHandler(dev string, baud int, ich <-chan string, och chan<- string) {
 		ctrl_ch := make(chan int)
 		go serialOutput(serialport, ich, ctrl_ch)
 
-		slog.Info("SerialInput init")
+		slog.Info("SerialInput init", "port", dev)
 		scanner := bufio.NewScanner(serialport)
 		for scanner.Scan() {
 			msg := scanner.Text()
-			och <- msg
-			slog.Debug("SerialInput read", "payload", msg)
+			if strings.HasPrefix(msg, filter) {
+				och <- msg
+				slog.Debug("SerialInput read", "port", dev, "payload", msg)
+			}
 		}
 		close(ctrl_ch)
 		if err := scanner.Err(); err != nil {
-			slog.Error("SerialInput scanner", "error", err)
+			slog.Error("SerialInput scanner", "port", dev, "error", err)
 		}
-		slog.Info("SerialInput done")
+		slog.Info("SerialInput done", "port", dev)
 		serialport.Close()
 		time.Sleep(5 * time.Second)
 	}
