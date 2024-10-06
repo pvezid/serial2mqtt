@@ -26,32 +26,42 @@ import (
 // test avec:
 // nc -kluw 0 {port}
 
-func UDPHandler(connstr string, ich <-chan string) {
-
-	addr, err := net.ResolveUDPAddr("udp4", connstr)
-	if err != nil {
-		slog.Error("UDP ResolveUDPAddr", "Error", err)
-		return
+func UDPHandler(connstr string) chan string {
+	if connstr == "" {
+		return nil
 	}
 
-	conn, err := net.DialUDP("udp4", nil, addr)
-	if err != nil {
-		slog.Error("UDP DialUDP", "Error", err)
-		return
-	}
-	defer conn.Close()
+	ich := make(chan string, 4)
 
-	slog.Info("UDP is ready to send", "conn", connstr)
-
-	slog.Info("UDPOutput init")
-	for m := range ich {
-		buff := fmt.Sprintf("%s\n", m)
-		_, err := conn.Write([]byte(buff))
+	go func() {
+		addr, err := net.ResolveUDPAddr("udp4", connstr)
 		if err != nil {
-			slog.Error("UDPOutput write", "error", err)
-		} else {
-			slog.Debug("UDPOutput wrote", "payload", m)
+			slog.Error("UDP ResolveUDPAddr", "Error", err)
+			return
 		}
-	}
-	slog.Info("UDPOutput done")
+
+		conn, err := net.DialUDP("udp4", nil, addr)
+		if err != nil {
+			slog.Error("UDP DialUDP", "Error", err)
+			return
+		}
+		defer conn.Close()
+
+		slog.Info("UDP is ready to send", "conn", connstr)
+
+		slog.Info("UDPOutput init")
+		for m := range ich {
+			slog.Debug("UDPOutput", "payload", m)
+			buff := fmt.Sprintf("%s\n", m)
+			_, err := conn.Write([]byte(buff))
+			if err != nil {
+				slog.Error("UDPOutput write", "error", err)
+			} else {
+				slog.Debug("UDPOutput wrote", "payload", m)
+			}
+		}
+		slog.Info("UDPOutput done")
+	}()
+
+	return ich
 }

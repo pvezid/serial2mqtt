@@ -23,6 +23,7 @@ import (
 	"go.bug.st/serial"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,61 +41,94 @@ func SerialPortList() {
 	}
 }
 
-func SerialHandler(dev string, baud int, ich <-chan string, och chan<- string, filter string) {
-	mode := &serial.Mode{
-		BaudRate: baud,
+func SerialHandler(dev string, baud int, filter string) (chan string, chan string) {
+	if dev == "" {
+		return nil, nil
 	}
-	for {
-		slog.Info("Serial open", "port", dev, "baud", baud)
-		serialport, err := serial.Open(dev, mode)
-		if err != nil {
-			slog.Error("Serial", "port", dev, "error", err)
-			time.Sleep(18 * time.Second)
-			continue
+
+	ich := make(chan string, 4)
+	och := make(chan string, 4)
+
+	go func() {
+		mode := &serial.Mode{
+			BaudRate: baud,
 		}
-
-		// on introduit un control channel pour pouvoir terminer serialOutput
-		// sans devoir fermer le channel "appelant" ich
-		ctrl_ch := make(chan int)
-		go serialOutput(serialport, ich, ctrl_ch)
-
-		slog.Info("SerialInput init", "port", dev)
-		scanner := bufio.NewScanner(serialport)
-		for scanner.Scan() {
-			msg := scanner.Text()
-			if strings.HasPrefix(msg, filter) {
-				och <- msg
-				slog.Debug("SerialInput read", "port", dev, "payload", msg)
+		for {
+			slog.Info("Serial open", "port", dev, "baud", baud)
+			serialport, err := serial.Open(dev, mode)
+			if err != nil {
+				slog.Error("Serial", "port", dev, "error", err)
+				time.Sleep(18 * time.Second)
+				continue
 			}
+
+			// on introduit un control channel pour pouvoir terminer serialOutput
+			// sans devoir fermer le channel "appelant" ich
+			// serialOutput est non bloquant
+			ctrl_ch, wg := serialOutput(serialport, ich)
+
+			// serialInput est bloquant
+			serialInput(dev, serialport, filter, och)
+			close(ctrl_ch) // force l'arrêt de serialOutput
+			wg.Wait()      // on attend la fin de la goroutine de serialOutput
+
+			serialport.Close()
+			slog.Info("Serial closed")
+			time.Sleep(5 * time.Second)
 		}
-		close(ctrl_ch)
-		if err := scanner.Err(); err != nil {
-			slog.Error("SerialInput scanner", "port", dev, "error", err)
-		}
-		slog.Info("SerialInput done", "port", dev)
-		serialport.Close()
-		time.Sleep(5 * time.Second)
-	}
+	}()
+
+	return ich, och
 }
 
-func serialOutput(serialport serial.Port, ich <-chan string, cch <-chan int) {
-	slog.Info("SerialOutput init")
-Loop:
-	for {
-		select {
-		case m := <-ich:
-			buff := fmt.Sprintln(m)
-			_, err := serialport.Write([]byte(buff))
-			if err != nil {
-				slog.Error("SerialOutput write", "error", err)
-			} else {
-				slog.Debug("SerialOutput wrote", "payload", m)
+func serialInput(dev string, serialport serial.Port, filter string, och chan<- string) {
+	slog.Info("SerialInput init")
+	scanner := bufio.NewScanner(serialport)
+	warmup := 2
+	for scanner.Scan() {
+		msg := scanner.Text()
+		if warmup == 0 {
+			if filter == "" || strings.HasPrefix(msg, filter) {
+				slog.Debug("SerialInput read", "port", dev, "payload", msg)
+				och <- fmt.Sprintf("%v:%s:%s", time.Now().UnixNano(), dev, msg)
 			}
-		case _, ok := <-cch:
-			if !ok {
-				break Loop
-			}
+		} else {
+			warmup -= 1
 		}
 	}
-	slog.Info("SerialOutput done")
+	if err := scanner.Err(); err != nil {
+		slog.Error("SerialInput scanner", "error", err)
+	}
+	slog.Info("SerialInput done")
+}
+
+func serialOutput(serialport serial.Port, ich <-chan string) (chan struct{}, *sync.WaitGroup) {
+	ctrl_ch := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		slog.Info("SerialOutput init")
+	Loop:
+		for {
+			select {
+			case m := <-ich:
+				buff := fmt.Sprintln(m)
+				_, err := serialport.Write([]byte(buff))
+				if err != nil {
+					slog.Error("SerialOutput write", "error", err)
+				} else {
+					slog.Debug("SerialOutput wrote", "payload", m)
+				}
+			case _, ok := <-ctrl_ch:
+				if !ok {
+					break Loop
+				}
+			}
+		}
+		slog.Info("SerialOutput done")
+	}()
+
+	return ctrl_ch, &wg
 }

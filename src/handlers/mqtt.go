@@ -21,9 +21,16 @@ import (
 	"fmt"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"log/slog"
+	"time"
 )
 
-func MQTTHandler(brokerURL string, subtopic string, pubtopic string, ich <-chan string, och chan<- string) {
+func MQTTHandler(brokerURL string, subtopic string, pubtopic string) (chan string, chan string) {
+	if brokerURL == "" {
+		return nil, nil
+	}
+
+	ich := make(chan string, 4)
+	och := make(chan string, 4)
 
 	var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 		buff := fmt.Sprintf("%s", msg.Payload())
@@ -31,30 +38,40 @@ func MQTTHandler(brokerURL string, subtopic string, pubtopic string, ich <-chan 
 		och <- buff
 	}
 
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(brokerURL)
-	opts.SetDefaultPublishHandler(messagePubHandler)
+	go func() {
+		opts := mqtt.NewClientOptions()
+		opts.AddBroker(brokerURL)
+		opts.SetDefaultPublishHandler(messagePubHandler)
+		opts.SetConnectionLostHandler(func(client mqtt.Client, reason error) {
+			slog.Warn("MQTT connection lost", "broker", brokerURL, "reason", reason.Error())
+		})
+		opts.SetAutoReconnect(true)
+		opts.SetOrderMatters(false)
+		opts.SetKeepAlive(25 * time.Second)
 
-	mqttcli := mqtt.NewClient(opts)
-	if token := mqttcli.Connect(); token.Wait() && token.Error() != nil {
-		slog.Error("MQTT connect", "broker", brokerURL, "error", token.Error())
-		return
-	}
-
-	if subtopic != "" {
-		if token := mqttcli.Subscribe(subtopic, 1, nil); token.Wait() && token.Error() != nil {
-			slog.Error("MQTT subscribe", "topic", subtopic, "error", token.Error())
-		} else {
-			slog.Info("Subscribed", "topic", subtopic)
+		mqttcli := mqtt.NewClient(opts)
+		if token := mqttcli.Connect(); token.Wait() && token.Error() != nil {
+			slog.Error("MQTT connect", "broker", brokerURL, "error", token.Error())
+			return
 		}
-	}
-	for msg := range ich {
-		if pubtopic != "" {
-			if token := mqttcli.Publish(pubtopic, 0, false, msg); token.Wait() && token.Error() != nil {
-				slog.Error("MQTT publish", "topic", pubtopic, "error", token.Error())
+
+		if subtopic != "" {
+			if token := mqttcli.Subscribe(subtopic, 1, nil); token.Wait() && token.Error() != nil {
+				slog.Error("MQTT subscribe", "topic", subtopic, "error", token.Error())
 			} else {
-				slog.Debug("Message published", "topic", pubtopic, "payload", msg)
+				slog.Info("Subscribed", "topic", subtopic)
 			}
 		}
-	}
+		for msg := range ich {
+			if pubtopic != "" {
+				if token := mqttcli.Publish(pubtopic, 0, false, msg); token.Wait() && token.Error() != nil {
+					slog.Error("MQTT publish", "topic", pubtopic, "error", token.Error())
+				} else {
+					slog.Debug("Message published", "topic", pubtopic, "payload", msg)
+				}
+			}
+		}
+	}()
+
+	return ich, och
 }

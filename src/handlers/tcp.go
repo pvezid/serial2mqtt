@@ -34,23 +34,34 @@ const maxConn = 10
 // test avec:
 // nc {host} {port}
 
-func TCPHandler(connstr string, ich <-chan string) {
-	sig := make(chan os.Signal)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-
-	s, err := newServer(connstr)
-	if err != nil {
-		return
+func TCPHandler(connstr string) chan string {
+	if connstr == "" {
+		return nil
 	}
-	defer s.listener.Close()
 
-	slog.Info("TC Server is listening", "conn", connstr)
+	ich := make(chan string, 4)
 
-	go s.handleRequests(ich)
-	go s.acceptConnections()
+	go func() {
+		sig := make(chan os.Signal)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
-	<-sig
-	slog.Info("TCP stop signal received")
+		s, err := newServer(connstr)
+		if err != nil {
+			slog.Error("TCP Server", "connstr", connstr, "error", err.Error())
+			return
+		}
+		defer s.listener.Close()
+
+		slog.Info("TCP Server is listening", "conn", connstr)
+
+		go s.handleRequests(ich)
+		go s.acceptConnections()
+
+		<-sig
+		slog.Info("TCP stop signal received")
+	}()
+
+	return ich
 }
 
 type server struct {
@@ -105,6 +116,7 @@ func (s *server) addConnection(conn net.Conn) error {
 func (s *server) handleRequests(ich <-chan string) {
 	slog.Info("TCPOutput init")
 	for m := range ich {
+		slog.Debug("TCPOutput", "payload", m)
 		buff := fmt.Sprintf("%s\r\n", m)
 		s.broadcast(buff)
 	}

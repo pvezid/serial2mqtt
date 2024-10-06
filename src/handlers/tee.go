@@ -30,45 +30,64 @@ import (
 	"time"
 )
 
-func TeeHandler(fileName string, chunkSize int64, logArchDir string, ich <-chan string, och chan<- string) {
-	sig := make(chan os.Signal)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	archDir := isWriteableDirectory(logArchDir)
-	fo := createFile(fileName)
-loop:
-	for {
-		select {
-		case msg := <-ich:
-			och <- msg
-			if fo != nil {
-				if info, err := fo.Stat(); err == nil {
-					if info.Size() > chunkSize {
-						fo.Close()
-						if archDir {
-							name := fo.Name()
-							slog.Info("Tee archiving", "name", name, "arch directory", logArchDir)
-							go moveFile(name, path.Join(logArchDir, path.Base(name)))
-						}
-						fo = createFile(fileName)
+func TeeHandler(fileName string, chunkSize int64, logArchDir string, monitor string) (chan string, chan string) {
+	ich := make(chan string, 4)
+	och := make(chan string, 4)
+
+	go func() {
+		sig := make(chan os.Signal)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		archDirWriteable := false
+		if fileName != "" {
+			archDirWriteable = isWriteableDirectory(logArchDir)
+		}
+		fo := createFile(fileName)
+		state := 0
+		mask := ""
+		monTimeout := 3 * time.Second
+		tmr := time.AfterFunc(monTimeout, func() { state = 0 })
+	loop:
+		for {
+			select {
+			case msg := <-ich:
+				pl := msg
+				dev := ""
+				i := strings.Index(msg, ":")
+				if i >= 0 {
+					j := strings.Index(msg[i+1:], ":")
+					if j >= 0 {
+						pl = msg[i+j+2:]
+						dev = msg[i+1 : i+j+1]
 					}
 				}
-				buff := fmt.Sprintln(msg)
-				fo.Write([]byte(buff))
+				if monitor != "" && dev == monitor {
+					tmr.Reset(monTimeout)
+					state = 1
+				}
+				if monitor == "" || (dev != monitor && state == 0) || (dev == monitor && state == 1) {
+					och <- pl
+					mask = ""
+				} else {
+					mask = "#"
+				}
+				slog.Debug("Tee", "monitor", monitor, "dev", dev, "mask", mask, "state", state, "payload", pl)
+				writeFile(fmt.Sprintf("%s%s", mask, msg), fo, fileName, chunkSize, logArchDir, archDirWriteable)
+			case <-sig:
+				slog.Info("Tee stop signal received")
+				break loop
 			}
-		case <-sig:
-			slog.Info("Tee stop signal received")
-			break loop
 		}
-	}
-	fo.Close()
-	if archDir {
-		name := fo.Name()
-		slog.Info("Tee archiving", "name", name, "arch directory", logArchDir)
-		moveFile(name, path.Join(logArchDir, path.Base(name)))
-	}
+		closeFile(fo, logArchDir, archDirWriteable)
+		close(och)
+	}()
+
+	return ich, och
 }
 
 func createFile(fileName string) *os.File {
+	if fileName == "" {
+		return nil
+	}
 	ext := filepath.Ext(fileName)
 	base := strings.TrimSuffix(fileName, ext)
 	ts := fmt.Sprintf("%s", time.Now().Format(time.RFC3339))
@@ -102,6 +121,35 @@ func isWriteableDirectory(name string) bool {
 	}
 	slog.Error("Tee not a directory", "name", name)
 	return false
+}
+
+func writeFile(msg string, fo *os.File, fileName string, chunkSize int64, logArchDir string, archDirWriteable bool) {
+	if fo != nil {
+		if info, err := fo.Stat(); err == nil {
+			if info.Size() > chunkSize {
+				fo.Close()
+				if archDirWriteable {
+					name := fo.Name()
+					slog.Info("Tee archiving", "name", name, "arch directory", logArchDir)
+					go moveFile(name, path.Join(logArchDir, path.Base(name)))
+				}
+				fo = createFile(fileName)
+			}
+		}
+		buff := fmt.Sprintln(msg)
+		fo.Write([]byte(buff))
+	}
+}
+
+func closeFile(fo *os.File, logArchDir string, archDirWriteable bool) {
+	if fo != nil {
+		fo.Close()
+		if archDirWriteable {
+			name := fo.Name()
+			slog.Info("Tee archiving", "name", name, "arch directory", logArchDir)
+			moveFile(name, path.Join(logArchDir, path.Base(name)))
+		}
+	}
 }
 
 func moveFile(sourcePath, destPath string) error {

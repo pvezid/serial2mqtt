@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"menie.org/messager/handlers"
 	"os"
-	"sync"
 )
 
 var (
@@ -55,56 +54,52 @@ func init() {
 }
 
 func main() {
-	var twg sync.WaitGroup
 
 	setFlags()
 	setLogger()
 
-	if serialdev == "" {
-		slog.Error("A serial device is mandatory")
-		os.Exit(1)
-	}
+	/*
+		if serialdev == "" {
+			slog.Error("A serial device is mandatory")
+			os.Exit(1)
+		}
+	*/
 
 	handlers.SerialPortList()
 
-	ch_S2N := make(chan string, 10)
-	ch_N2S := make(chan string, 3)
+	ich, och := handlers.TeeHandler(logFile, int64(logMaxSize), logArchDir, "/dev/ttyNEOM8N")
 
-	// SerialHandler tourne en boucle en permanence
-	if logFile == "" {
-		go handlers.SerialHandler("/dev/ttyGPS", 4800, nil, ch_S2N, "$GP")
-		go handlers.SerialHandler("/dev/ttyGX2200E", 38400, nil, ch_S2N, "!AI")
-	} else {
-		ch_log := make(chan string, 10)
-		go handlers.SerialHandler("/dev/ttyGPS", 4800, nil, ch_log, "$GP")
-		go handlers.SerialHandler("/dev/ttyGX2200E", 38400, nil, ch_log, "!AI")
-		twg.Add(1)
-		go func() {
-			defer twg.Done()
-			handlers.TeeHandler(logFile, int64(logMaxSize), logArchDir, ch_log, ch_S2N)
-			close(ch_S2N)
-		}()
-	}
+	go func() {
 
-	if brokerURL != "" {
-		handlers.MQTTHandler(brokerURL, subtopic, pubtopic, ch_S2N, ch_N2S)
-	} else if udpbroadcast != "" {
-		ch_o1 := make(chan string, 3)
-		ch_o2 := make(chan string, 3)
-		go func() {
-			for msg := range ch_S2N {
-				slog.Debug("Dispatch writing", "payload", msg)
-				ch_o1 <- msg
-				ch_o2 <- msg
+		// SerialHandler tournent en boucle en permanence
+		_, sc1 := handlers.SerialHandler("/dev/ttyGPS", 4800, "")
+		_, sc2 := handlers.SerialHandler("/dev/ttyNEOM8N", 9600, "")
+
+		for {
+			select {
+			case s := <-sc1:
+				ich <- s
+			case s := <-sc2:
+				ich <- s
 			}
-		}()
-		go handlers.UDPHandler(udpbroadcast, ch_o1)
-		handlers.TCPHandler(tcpserver, ch_o2)
-	} else {
-		handlers.TCPHandler(tcpserver, ch_S2N)
-	}
+		}
+	}()
 
-	twg.Wait()
+	_, c1 := handlers.MQTTHandler(brokerURL, subtopic, pubtopic)
+	c2 := handlers.TCPHandler(tcpserver)
+	c3 := handlers.UDPHandler(udpbroadcast)
+
+	for msg := range och {
+		if c1 != nil {
+			c1 <- msg
+		}
+		if c2 != nil {
+			c2 <- msg
+		}
+		if c3 != nil {
+			c3 <- msg
+		}
+	}
 }
 
 func setFlags() {
