@@ -58,13 +58,6 @@ func main() {
 	setFlags()
 	setLogger()
 
-	/*
-		if serialdev == "" {
-			slog.Error("A serial device is mandatory")
-			os.Exit(1)
-		}
-	*/
-
 	handlers.SerialPortList()
 
 	ich, och := handlers.TeeHandler(logFile, int64(logMaxSize), logArchDir, "/dev/ttyNEOM8N")
