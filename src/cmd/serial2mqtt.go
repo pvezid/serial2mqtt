@@ -53,7 +53,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	sic, soc := handlers.SerialHandler(serialdev, serialbaud, "", true)
+	sic, soc := handlers.SerialHandler(serialdev, serialbaud)
 	nic, noc := handlers.MQTTHandler(brokerURL, subtopic, pubtopic)
 
 	go func() {

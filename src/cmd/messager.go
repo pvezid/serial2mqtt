@@ -23,6 +23,9 @@ import (
 	"log/slog"
 	"menie.org/messager/handlers"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 var (
@@ -58,24 +61,45 @@ func main() {
 	setFlags()
 	setLogger()
 
+	sig := make(chan os.Signal)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+
 	handlers.SerialPortList()
 
-	ich, och := handlers.TeeHandler(logFile, int64(logMaxSize), logArchDir, "/dev/ttyNEOM8N")
+	ich, och := handlers.TeeHandler(logFile, int64(logMaxSize), logArchDir)
 
 	go func() {
 
 		// SerialHandler tournent en boucle en permanence
-		_, sc1 := handlers.SerialHandler("/dev/ttyGPS", 4800, "", false)
-		_, sc2 := handlers.SerialHandler("/dev/ttyGX2200E", 38400, "", false)
+		_, sc1 := handlers.SerialHandler("/dev/ttyGPS", 4800)
+		_, sc2 := handlers.SerialHandler("/dev/ttyGX2200E", 38400)
 
+		state := 1
+		monTimeout := 3 * time.Second
+		tmr := time.AfterFunc(monTimeout, func() { state = 0 })
+
+	Loop:
 		for {
 			select {
 			case s := <-sc1:
-				ich <- s
+				m := handlers.MaskableMessage{}
+				m.Device = "/dev/ttyGPS"
+				m.Msg = s
+				m.Masked = (state == 1)
+				ich <- m
 			case s := <-sc2:
-				ich <- s
+				tmr.Reset(monTimeout)
+				state = 1
+				m := handlers.MaskableMessage{}
+				m.Device = "/dev/ttyGX2200E"
+				m.Msg = s
+				ich <- m
+			case <-sig:
+				slog.Info("Stop signal received")
+				break Loop
 			}
 		}
+		close(ich)
 	}()
 
 	_, c1 := handlers.MQTTHandler(brokerURL, subtopic, pubtopic)
