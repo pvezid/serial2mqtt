@@ -41,7 +41,7 @@ func SerialPortList() {
 	}
 }
 
-func SerialHandler(dev string, baud int, filter string) (chan string, chan string) {
+func SerialHandler(dev string, baud int, filter string, raw bool) (chan string, chan string) {
 	if dev == "" {
 		return nil, nil
 	}
@@ -68,7 +68,7 @@ func SerialHandler(dev string, baud int, filter string) (chan string, chan strin
 			ctrl_ch, wg := serialOutput(serialport, ich)
 
 			// serialInput est bloquant
-			serialInput(dev, serialport, filter, och)
+			serialInput(dev, serialport, filter, raw, och)
 			close(ctrl_ch) // force l'arrêt de serialOutput
 			wg.Wait()      // on attend la fin de la goroutine de serialOutput
 
@@ -81,7 +81,7 @@ func SerialHandler(dev string, baud int, filter string) (chan string, chan strin
 	return ich, och
 }
 
-func serialInput(dev string, serialport serial.Port, filter string, och chan<- string) {
+func serialInput(dev string, serialport serial.Port, filter string, raw bool, och chan<- string) {
 	slog.Info("SerialInput init")
 	scanner := bufio.NewScanner(serialport)
 	warmup := 2
@@ -90,7 +90,11 @@ func serialInput(dev string, serialport serial.Port, filter string, och chan<- s
 		if warmup == 0 {
 			if filter == "" || strings.HasPrefix(msg, filter) {
 				slog.Debug("SerialInput read", "port", dev, "payload", msg)
-				och <- fmt.Sprintf("%v:%s:%s", time.Now().UnixNano(), dev, msg)
+				if raw {
+					och <- fmt.Sprintf("%s", msg)
+				} else {
+					och <- fmt.Sprintf("%v:%s:%s", time.Now().UnixNano(), dev, msg)
+				}
 			}
 		} else {
 			warmup -= 1

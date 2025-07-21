@@ -65,8 +65,8 @@ func main() {
 	go func() {
 
 		// SerialHandler tournent en boucle en permanence
-		_, sc1 := handlers.SerialHandler("/dev/ttyGPS", 4800, "")
-		_, sc2 := handlers.SerialHandler("/dev/ttyGX2200E", 38400, "")
+		_, sc1 := handlers.SerialHandler("/dev/ttyGPS", 4800, "", false)
+		_, sc2 := handlers.SerialHandler("/dev/ttyGX2200E", 38400, "", false)
 
 		for {
 			select {

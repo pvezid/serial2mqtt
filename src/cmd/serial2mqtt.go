@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"menie.org/messager/handlers"
 	"os"
-	"strings"
 )
 
 var (
@@ -54,14 +53,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	sic, soc := handlers.SerialHandler(serialdev, serialbaud, "")
+	sic, soc := handlers.SerialHandler(serialdev, serialbaud, "", true)
 	nic, noc := handlers.MQTTHandler(brokerURL, subtopic, pubtopic)
 
 	go func() {
 		for s := range soc {
-			v := strings.SplitN(s, ":", 3)
-			// on ignore ts et le device
-			nic <- v[2]
+			nic <- s
 		}
 	}()
 	for s := range noc {
