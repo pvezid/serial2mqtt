@@ -26,7 +26,7 @@ import (
 // test avec:
 // nc -kluw 0 {port}
 
-func UDPHandler(connstr string) chan string {
+func UDPHandler(connstr string) chan<- string {
 	if connstr == "" {
 		return nil
 	}

@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-func MQTTHandler(brokerURL string, subtopic string, pubtopic string) (chan string, chan string) {
+func MQTTHandler(brokerURL string, subtopic string, pubtopic string) (chan<- string, <-chan string) {
 	if brokerURL == "" {
 		return nil, nil
 	}
@@ -41,7 +41,9 @@ func MQTTHandler(brokerURL string, subtopic string, pubtopic string) (chan strin
 	go func() {
 		opts := mqtt.NewClientOptions()
 		opts.AddBroker(brokerURL)
-		opts.SetDefaultPublishHandler(messagePubHandler)
+		if subtopic != "" {
+			opts.SetDefaultPublishHandler(messagePubHandler)
+		}
 		opts.SetConnectionLostHandler(func(client mqtt.Client, reason error) {
 			slog.Warn("MQTT connection lost", "broker", brokerURL, "reason", reason.Error())
 		})

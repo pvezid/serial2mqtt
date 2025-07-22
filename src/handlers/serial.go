@@ -45,7 +45,7 @@ func SerialPortList() {
 	}
 }
 
-func SerialHandler(dev string, baud int) (chan string, chan string) {
+func SerialHandler(dev string, baud int) (chan<- string, <-chan string) {
 	if dev == "" {
 		return nil, nil
 	}

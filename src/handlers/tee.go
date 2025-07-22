@@ -43,7 +43,7 @@ type logger struct {
 	fp               *os.File
 }
 
-func TeeHandler(fileName string, chunkSize int64, logArchDir string) (chan MaskableMessage, chan string) {
+func TeeHandler(fileName string, chunkSize int64, logArchDir string) (chan<- MaskableMessage, <-chan string) {
 	ich := make(chan MaskableMessage, 4)
 	och := make(chan string, 4)
 
@@ -89,29 +89,31 @@ func (log *logger) createFile() {
 }
 
 func (log *logger) writeFile(msg string) {
-	if log.fp != nil {
-		if info, err := log.fp.Stat(); err == nil {
-			if info.Size() > log.chunkSize {
-				log.fp.Close()
-				if log.archDirWriteable {
-					slog.Info("Tee archiving", "name", log.fileName, "arch directory", log.logArchDir)
-					go moveFile(log.fileName, path.Join(log.logArchDir, path.Base(log.fileName)))
-				}
-				log.createFile()
-			}
-		}
-		buff := fmt.Sprintln(msg)
-		log.fp.Write([]byte(buff))
+	if log.fp == nil {
+		return
 	}
+	if info, err := log.fp.Stat(); err == nil {
+		if info.Size() > log.chunkSize {
+			log.fp.Close()
+			if log.archDirWriteable {
+				slog.Info("Tee archiving", "name", log.fileName, "arch directory", log.logArchDir)
+				go moveFile(log.fileName, path.Join(log.logArchDir, path.Base(log.fileName)))
+			}
+			log.createFile()
+		}
+	}
+	buff := fmt.Sprintln(msg)
+	log.fp.Write([]byte(buff))
 }
 
 func (log *logger) closeFile() {
-	if log.fp != nil {
-		log.fp.Close()
-		if log.archDirWriteable {
-			slog.Info("Tee archiving", "name", log.fileName, "arch directory", log.logArchDir)
-			moveFile(log.fileName, path.Join(log.logArchDir, path.Base(log.fileName)))
-		}
+	if log.fp == nil {
+		return
+	}
+	log.fp.Close()
+	if log.archDirWriteable {
+		slog.Info("Tee archiving", "name", log.fileName, "arch directory", log.logArchDir)
+		moveFile(log.fileName, path.Join(log.logArchDir, path.Base(log.fileName)))
 	}
 }
 
@@ -121,46 +123,48 @@ func isWriteableDirectory(name string) bool {
 		slog.Error("Tee directory", "name", name, "error", err)
 		return false
 	}
+
 	mode := fi.Mode()
-	if mode.IsDir() {
-		file, err := os.CreateTemp(name, "tmpfile")
-		if err != nil {
-			slog.Error("Tee directory", "name", name, "error", err)
-			return false
-		}
-		file.Close()
-		os.Remove(file.Name())
-		slog.Error("Tee directory is writeable", "name", name)
-		return true
+	if !mode.IsDir() {
+		slog.Error("Tee not a directory", "name", name)
+		return false
 	}
-	slog.Error("Tee not a directory", "name", name)
-	return false
+
+	file, err := os.CreateTemp(name, "tmpfile")
+	if err != nil {
+		slog.Error("Tee directory", "name", name, "error", err)
+		return false
+	}
+	file.Close()
+	os.Remove(file.Name())
+
+	slog.Info("Tee directory is writeable", "name", name)
+	return true
 }
 
 func moveFile(sourcePath, destPath string) error {
-	inputFile, err := os.Open(sourcePath)
+	err := copyFile(sourcePath, destPath)
 	if err != nil {
 		return err
 	}
 
+	err = os.Remove(sourcePath)
+	return err
+}
+
+func copyFile(sourcePath, destPath string) error {
+	inputFile, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer inputFile.Close()
+
 	outputFile, err := os.Create(destPath)
 	if err != nil {
-		inputFile.Close()
 		return err
 	}
 	defer outputFile.Close()
 
 	_, err = io.Copy(outputFile, inputFile)
-	if err != nil {
-		inputFile.Close()
-		return err
-	}
-
-	inputFile.Close() // for Windows, close before trying to remove: https://stackoverflow.com/a/64943554/246801
-
-	err = os.Remove(sourcePath)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }

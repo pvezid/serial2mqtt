@@ -37,7 +37,6 @@ var (
 	serialbaud   int
 	tcpserver    string
 	udpbroadcast string
-	subtopic     string
 	pubtopic     string
 	debugmode    bool
 )
@@ -51,7 +50,6 @@ func init() {
 	flag.IntVar(&serialbaud, "b", 115200, "serial baudrate")
 	flag.StringVar(&tcpserver, "t", "localhost:5000", "TCP port")
 	flag.StringVar(&udpbroadcast, "u", "", "UDP broadcast")
-	flag.StringVar(&subtopic, "s", "", "topic to be subscribed")
 	flag.StringVar(&pubtopic, "p", "", "topic to be published")
 	flag.BoolVar(&debugmode, "debug", false, "set loglevel to DEBUG")
 }
@@ -102,7 +100,7 @@ func main() {
 		close(ich)
 	}()
 
-	_, c1 := handlers.MQTTHandler(brokerURL, subtopic, pubtopic)
+	c1, _ := handlers.MQTTHandler(brokerURL, "", pubtopic)
 	c2 := handlers.TCPHandler(tcpserver)
 	c3 := handlers.UDPHandler(udpbroadcast)
 
@@ -117,6 +115,18 @@ func main() {
 			c3 <- msg
 		}
 	}
+	if c1 != nil {
+		close(c1)
+	}
+	if c2 != nil {
+		close(c2)
+	}
+	if c3 != nil {
+		close(c3)
+	}
+	// on donne un peu de temps aux handlers pour terminer
+	// mais sans implémenter une fermeture corrrecte
+	time.Sleep(5 * time.Second)
 }
 
 func setFlags() {

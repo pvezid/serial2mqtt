@@ -22,10 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -34,7 +31,7 @@ const maxConn = 10
 // test avec:
 // nc {host} {port}
 
-func TCPHandler(connstr string) chan string {
+func TCPHandler(connstr string) chan<- string {
 	if connstr == "" {
 		return nil
 	}
@@ -42,9 +39,6 @@ func TCPHandler(connstr string) chan string {
 	ich := make(chan string, 4)
 
 	go func() {
-		sig := make(chan os.Signal)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-
 		s, err := newServer(connstr)
 		if err != nil {
 			slog.Error("TCP Server", "connstr", connstr, "error", err.Error())
@@ -54,11 +48,8 @@ func TCPHandler(connstr string) chan string {
 
 		slog.Info("TCP Server is listening", "conn", connstr)
 
-		go s.handleRequests(ich)
 		go s.acceptConnections()
-
-		<-sig
-		slog.Info("TCP stop signal received")
+		s.handleRequests(ich)
 	}()
 
 	return ich
