@@ -18,15 +18,12 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"sync"
-	"time"
 )
 
-const maxConn = 10
+type client chan<- string // an outgoing message channel
 
 // test avec:
 // nc {host} {port}
@@ -39,98 +36,74 @@ func TCPHandler(connstr string) chan<- string {
 	ich := make(chan string, 4)
 
 	go func() {
-		s, err := newServer(connstr)
+		listener, err := net.Listen("tcp", connstr)
 		if err != nil {
-			slog.Error("TCP Server", "connstr", connstr, "error", err.Error())
+			slog.Error("TCP listen", "connection", connstr, "error", err)
 			return
 		}
-		defer s.listener.Close()
+		defer listener.Close()
 
-		slog.Info("TCP Server is listening", "conn", connstr)
+		slog.Info("TCP Server is listening", "connection", connstr)
 
-		go s.acceptConnections()
-		s.handleRequests(ich)
+		entering := make(chan client)
+		leaving := make(chan client)
+
+		go broadcaster(ich, entering, leaving)
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				slog.Error("TCP accept", "error", err)
+				continue
+			}
+			go handleConnection(conn, entering, leaving)
+		}
 	}()
 
 	return ich
 }
 
-type server struct {
-	listener net.Listener
-	muConn   sync.Mutex
-	connList []net.Conn
-}
-
-func newServer(connstr string) (*server, error) {
-	listener, err := net.Listen("tcp", connstr)
-	if err != nil {
-		slog.Error("TCP listen", "connection", connstr, "Error", err)
-		return nil, err
-	}
-
-	return &server{
-		listener: listener,
-		connList: make([]net.Conn, 0, maxConn),
-	}, nil
-}
-
-func (s *server) acceptConnections() {
+func broadcaster(ich <-chan string, entering chan client, leaving chan client) {
+	clients := make(map[client]bool) // all connected clients
+loop:
 	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			slog.Error("TCP accept", "Error", err)
-			return
+		select {
+		case msg, ok := <-ich:
+			// Broadcast incoming message to all
+			// clients' outgoing message channels.
+			if ok {
+				for cli := range clients {
+					cli <- msg
+				}
+			} else {
+				break loop
+			}
+
+		case cli := <-entering:
+			clients[cli] = true
+
+		case cli := <-leaving:
+			delete(clients, cli)
+			close(cli)
 		}
-		err = s.addConnection(conn)
-		if err != nil {
-			slog.Info("TCP", "remote", conn.RemoteAddr(), "error", err)
-			conn.Close()
-		} else {
-			slog.Info("TCP new connection", "remote", conn.RemoteAddr())
-		}
+	}
+	for cli := range clients {
+		close(cli)
 	}
 }
 
-func (s *server) addConnection(conn net.Conn) error {
-	time.Sleep(500 * time.Millisecond)
-	s.muConn.Lock()
-	defer s.muConn.Unlock()
-
-	if len(s.connList) < maxConn {
-		s.connList = append(s.connList, conn)
-	} else {
-		return errors.New("connection rejected (max number of connections reached)")
-	}
-	return nil
-}
-
-func (s *server) handleRequests(ich <-chan string) {
-	slog.Info("TCPOutput init")
-	for m := range ich {
-		slog.Debug("TCPOutput", "payload", m)
-		buff := fmt.Sprintf("%s\r\n", m)
-		s.broadcast(buff)
-	}
-	slog.Info("TCPOutput done")
-}
-
-func (s *server) broadcast(buff string) {
-	newList := make([]net.Conn, 0, maxConn)
-	changed := false
-	for _, conn := range s.connList {
-		n, err := conn.Write([]byte(buff))
+func handleConnection(conn net.Conn, entering chan<- client, leaving chan<- client) {
+	slog.Info("TCP new connection", "remote", conn.RemoteAddr().String())
+	ch := make(chan string) // outgoing client messages
+	entering <- ch
+	for msg := range ch {
+		buff := fmt.Sprintf("%s\r\n", msg) // terminaison avec CRLF
+		_, err := conn.Write([]byte(buff))
 		if err != nil {
-			slog.Error("TCPOutput write", "error", err)
-			conn.Close()
-			changed = true
-		} else {
-			slog.Debug("TCPOutput wrote", "bytes", n)
-			newList = append(newList, conn)
+			leaving <- ch
+			break
 		}
 	}
-	if changed {
-		s.muConn.Lock()
-		s.connList = newList
-		s.muConn.Unlock()
-	}
+	slog.Info("TCP closing connection", "remote", conn.RemoteAddr().String())
+	conn.Close()
 }

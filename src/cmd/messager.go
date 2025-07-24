@@ -126,7 +126,7 @@ func main() {
 	}
 	// on donne un peu de temps aux handlers pour terminer
 	// mais sans implémenter une fermeture corrrecte
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 }
 
 func setFlags() {
