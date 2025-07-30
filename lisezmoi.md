@@ -5,7 +5,8 @@ sudo useradd -s /usr/sbin/nologin -M -G dialout messager
 sudo cat > /etc/systemd/system/messager.service <<EOF
 [Unit]
 Description=Serial to MQTT messager service
-After=network-online.target
+Requires=local-fs.target
+After=local-fs.target
 
 [Service]
 Type=exec
